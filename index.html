@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VR Hands Sandbox</title>
+<style>
+:root{color-scheme:dark;--bg:#07090d;--panel:rgba(14,20,28,.82);--fg:#e6f1ff;--mut:#8fa6bf;--acc:#4cc9ff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{margin:0;height:100%;background:var(--bg);overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+canvas{display:block}
+#ui{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--panel);color:var(--fg);padding:14px 18px;border-radius:14px;max-width:min(92vw,460px);text-align:center;font-size:14px;line-height:1.45}
+#ui p{margin:0 0 10px;color:var(--mut)}
+button{background:var(--acc);color:#04202c;border:0;border-radius:10px;padding:10px 18px;font-size:15px;font-weight:600;cursor:pointer;margin:0 4px}
+button.s{background:#223244;color:var(--fg)}
+</style></head><body>
+<div id="ui"><p>Left stick walks, A jumps, B respawns the balls. Trigger curls your index finger; squeeze the grip over a ball to grab it and let go to throw. Hand tracking works too, but without walking or jumping.</p>
+<button id="vr">Checking VR…</button><button id="rs" class="s">Reset balls</button><div id="err" style="margin-top:8px;font-size:12px;color:#ffb4a8"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const V3=THREE.Vector3, clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.xr.enabled=true;
+renderer.xr.setReferenceSpaceType('local-floor');
+document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x07090d);
+const cam=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.02,100);
+cam.position.set(0,1.5,0.9);cam.lookAt(0,1.1,-0.5);
+const rig=new THREE.Group();rig.add(cam);scene.add(rig);
+scene.add(new THREE.HemisphereLight(0xcfe8ff,0x223344,1.1));
+const sun=new THREE.DirectionalLight(0xffffff,0.9);sun.position.set(1,3,2);scene.add(sun);
+
+// SteamVR-style grid floor (procedural, fades with distance)
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(80,80).rotateX(-Math.PI/2),new THREE.ShaderMaterial({
+ transparent:true,extensions:{derivatives:true},
+ vertexShader:'varying vec3 w;void main(){w=(modelMatrix*vec4(position,1.)).xyz;gl_Position=projectionMatrix*viewMatrix*vec4(w,1.);}',
+ fragmentShader:`varying vec3 w;
+ float g(vec2 p,float s){vec2 q=p/s;vec2 d=abs(fract(q-.5)-.5)/fwidth(q);return 1.-min(min(d.x,d.y),1.);}
+ void main(){float m=g(w.xz,.25)*.22+g(w.xz,1.)*.95;float f=exp(-length(w.xz-cameraPosition.xz)*.09);
+ gl_FragColor=vec4(vec3(.35,.8,1.)*m+vec3(.03,.06,.09),(m*.9+.55)*f);}`}));
+scene.add(floor);
+
+// Hands: low-poly hand mesh, skinned to a finger rig, plain white
+const SKIN=new THREE.MeshStandardMaterial({color:0xf6f6f4,roughness:.72,metalness:0});
+const b64=s=>{const t=atob(s),u=new Uint8Array(t.length);for(let i=0;i<t.length;i++)u[i]=t.charCodeAt(i);return u;};
+const HV=new Int16Array(b64('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').buffer),HT=new Uint16Array(b64('AQACAFcAAQBXAFsAWwBaAAUAWwAFAAEAWgBZAAYAWgAGAAUABQAGAEsABQBLAEoACABWAXwBCAB8AQ0AAAB2AQkAAAAJAAMAAwAJAAoAAwAKAAQABAAKAAsABAALAAcACAATAAwACAAMAFUBEQBhAGAAEQBgABAAEgBiAGEAEgBhABEADQAUABMADQATAAgAEwAWADsAEwA7AAwAFAAXABYAFAAWABMAFQAYABcAFQAXABQAOwA8ADoBOwA6AQwAPAA9ADwBPAA8AToBYABfABoAYAAaABAAXwAZAE4AXwBOAG8AEAAbABwAEAAcABEAEQAcAB0AEQAdABIAGgAeABsAGgAbABAAbABtAB4AbAAeABoAGwAfACAAGwAgABwAHAAgACEAHAAhAB0AHgAiAB8AHgAfABsAbQAjACIAbQAiAB4AHwAkACUAHwAlACAAIAAlACYAIAAmACEAIgAnACQAIgAkAB8AIwAoACcAIwAnACIAdQF2AVQBdQFUAYcBegFFAUYBegFGAXkBeQFGAUIBeQFCAXgBDAA6ATsBDAA7AVUBJAApACoAJAAqACUAJQAqACsAJQArACYAJwAsACkAJwApACQAKAAtACwAKAAsACcAKQAuAC8AKQAvACoAKgAvADAAKgAwACsALAAxAC4ALAAuACkALQAyADEALQAxACwALgAzADQALgA0AC8ALwA0ADUALwA1ADAAMQA2ADMAMQAzAC4AMgA3ADYAMgA2ADEANAA4ADkANAA5ADUANwA6AE8ANwBPADYAPQAYABUAPQAVADwBFgA/AD4AFgA+ADsAFwBAAD8AFwA/ABYAGABBAEAAGABAABcAOwA+AEIAOwBCADwAPABCAEMAPABDAD0APQBDAEEAPQBBABgAAgBGABkAAgAZAEQAAgBEAEUAAgBFAA4AAQBHAEYAAQBGAAIARgBHAK8ARgCvABkArgCvAEcArgBHAAEAAQBIAHgAAQB4AK4ASQBIAAEASQABAAUA8ADxAEkA8ABJAAUASABJAPEASADxAHgABQBKALoABQC6APAASgBLADIBSgAyAboASwAGADEBSwAxATIBWQBYAEwAWQBMAAYABgBMAPsABgD7ADEBsABOABkAsAAZAK8AOgA3AGQAOgBkAGMAZAA3ADIAZAAyAGUAZQAyAC0AZQAtAGYAZgAtACgAZgAoAGcAZwAoACMAZwAjAGgAaAAjAG0AaABtAGkAaQBtAGwAaQBsAGoAbABvAG4AbABuAGoAOQA4AGsAOQBrAGMAVABTADMAVAAzADYAUgA0ADMAUgAzAFMAVQBPAGsAVQBrAFAAVgBSAFMAVgBTAFAAUABTAFQAUABUAFUAVAA2AE8AVABPAFUAUgBWADgAUgA4ADQATgCwALEATgCxAF0A8QDyAHoA8QB6AHgAWABZAAcAWAAHAE0AWQBaAAQAWQAEAAcAWgBbAAMAWgADAAQAWAA3AVwAWABcAEwATABcAP0ATAD9APsATQA9ATcBTQA3AVgAMwG8ALoAMwG6ADIBRQAPAFEARQBRAA4ADwBdAFABDwBQAVEAXQCxAE8BXQBPAVABsQB6APIAsQDyAF4AXwBgAEQAXwBEABkAYABhAEUAYABFAEQARQBhAGIARQBiAA8AOQBjAGQAOQBkADUANQBkAGUANQBlADAAMABlAGYAMABmACsAKwBmAGcAKwBnACYAJgBnAGgAJgBoACEAIQBoAGkAIQBpAB0AHQBpAGoAHQBqABIAagBuAGIAagBiABIAOgBjAGsAOgBrAE8AVgBQAGsAVgBrADgAXwBvAGwAXwBsABoADwBiAG4ADwBuAF0AXQBuAG8AXQBvAE4AcQBwAHMAcQBzAHIAdQB0AHAAdQBwAHEAcwB3AHYAcwB2AHIAdwB4AHoAdwB6AHkAcgB8AHsAcgB7AHEAcQB7AH0AcQB9AHUAdgB+AHwAdgB8AHIAfwCkAH4AfwB+AHYAfACBAIAAfACAAHsAewCAAIIAewCCAH0AfgCDAIEAfgCBAHwApACIAIMApACDAH4AgQCFAIQAgQCEAIAAgACEAIYAgACGAIIAgwCHAIUAgwCFAIEAiACJAIcAiACHAIMAhQCLAIoAhQCKAIQAhACKAIwAhACMAIYAhwCNAIsAhwCLAIUAiQCOAI0AiQCNAIcAiwCQAI8AiwCPAIoAigCPAJEAigCRAIwAjQCSAJAAjQCQAIsAjgCTAJIAjgCSAI0AkACVAJQAkACUAI8AjwCUAJYAjwCWAJEAkgCXAJUAkgCVAJAAkwCYAJcAkwCXAJIAlACaAJkAlACZAJYAmACcAJsAmACbAJcAnACYAJ4AnACeAJ0AngCYAJMAngCTAJ8AnwCTAI4AnwCOAKAAoACOAIkAoACJAKEAoQCJAIgAoQCIAKIAogCIAKQAogCkAKMAowCkAH8AowB/AKUAfwB5AKYAfwCmAKUAmQCaAKcAmQCnAJ0AqACpAJUAqACVAJcAqgCUAJUAqgCVAKkAqwCbAKcAqwCnAKwArQCqAKkArQCpAKwArACpAKgArACoAKsAqACXAJsAqACbAKsAqgCtAJoAqgCaAJQAdwBzAK4AdwCuAHgAcwBwAK8AcwCvAK4ArwBwAHQArwB0ALAAmQCdAJ4AmQCeAJYAlgCeAJ8AlgCfAJEAkQCfAKAAkQCgAIwAjACgAKEAjAChAIYAhgChAKIAhgCiAIIAggCiAKMAggCjAH0AfQCjAKUAfQClAHUApQCmAHQApQB0AHUAnACdAKcAnACnAJsArQCsAKcArQCnAJoAdwB5AH8AdwB/AHYAsAB0AKYAsACmALEAsQCmAHkAsQB5AHoAswCyALUAswC1ALQAtwC2ALIAtwCyALMAtQC5ALgAtQC4ALQAuQC6ALwAuQC8ALsAtAC+AL0AtAC9ALMAswC9AL8AswC/ALcAuADAAL4AuAC+ALQAwQDGAMAAwQDAALgAvgDDAMIAvgDCAL0AvQDCAMQAvQDEAL8AwADFAMMAwADDAL4AxgDLAMUAxgDFAMAAwwDIAMcAwwDHAMIAwgDHAMkAwgDJAMQAxQDKAMgAxQDIAMMAywDMAMoAywDKAMUAyADOAM0AyADNAMcAxwDNAM8AxwDPAMkAygDQAM4AygDOAMgAzADRANAAzADQAMoAzgDTANIAzgDSAM0AzQDSANQAzQDUAM8A0ADVANMA0ADTAM4A0QDWANUA0QDVANAA0wDYANcA0wDXANIA0gDXANkA0gDZANQA1QDaANgA1QDYANMA1gDbANoA1gDaANUA1wDdANwA1wDcANkA2wDfAN4A2wDeANoA3wDbAOEA3wDhAOAA4QDbANYA4QDWAOIA4gDWANEA4gDRAOMA4wDRAMwA4wDMAOQA5ADMAMsA5ADLAOUA5QDLAMYA5QDGAOYA5gDGAMEA5gDBAOcAwQC7AOgAwQDoAOcA3ADdAOkA3ADpAOAA6gDrANgA6gDYANoA7ADXANgA7ADYAOsA7QDeAOkA7QDpAO4A7wDsAOsA7wDrAO4A7gDrAOoA7gDqAO0A6gDaAN4A6gDeAO0A7ADvAN0A7ADdANcAuQC1APAAuQDwALoAtQCyAPEAtQDxAPAA8QCyALYA8QC2APIA3ADgAOEA3ADhANkA2QDhAOIA2QDiANQA1ADiAOMA1ADjAM8AzwDjAOQAzwDkAMkAyQDkAOUAyQDlAMQAxADlAOYAxADmAL8AvwDmAOcAvwDnALcA5wDoALYA5wC2ALcA3wDgAOkA3wDpAN4A7wDuAOkA7wDpAN0AuQC7AMEAuQDBALgA8gC2AOgA8gDoAF4AXgDoALsAXgC7ALwA9ADzAPYA9AD2APUA+AD3APMA+ADzAPQA9gD6APkA9gD5APUA+gD7AP0A+gD9APwA9QD/AP4A9QD+APQA9AD+AAAB9AAAAfgA+QABAf8A+QD/APUAKAEmAQEBKAEBAfkA/wADAQIB/wACAf4A/gACAQQB/gAEAQABAQEFAQMBAQEDAf8AJgEKAQUBJgEFAQEBAwEHAQYBAwEGAQIBAgEGAQgBAgEIAQQBBQEJAQcBBQEHAQMBCgELAQkBCgEJAQUBBwENAQwBBwEMAQYBBgEMAQ4BBgEOAQgBCQEPAQ0BCQENAQcBCwEQAQ8BCwEPAQkBDQESAREBDQERAQwBDAERARMBDAETAQ4BDwEUARIBDwESAQ0BEAEVARQBEAEUAQ8BEgEXARYBEgEWAREBEQEWARgBEQEYARMBFAEZARcBFAEXARIBFQEaARkBFQEZARQBFgEcARsBFgEbARgBGgEeAR0BGgEdARkBHgEaASABHgEgAR8BIAEaARUBIAEVASEBIQEVARABIQEQASIBIgEQAQsBIgELASMBIwELAQoBIwEKASQBJAEKASYBJAEmASUBJQEmASgBJQEoAScBKAH8ACkBKAEpAScBGwEcASoBGwEqAR8BKwEsARcBKwEXARkBLQEWARcBLQEXASwBLgEdASoBLgEqAS8BMAEtASwBMAEsAS8BLwEsASsBLwErAS4BKwEZAR0BKwEdAS4BLQEwARwBLQEcARYB+gD2ADEB+gAxAfsA9gDzADIB9gAyATEBMgHzAPcAMgH3ADMBGwEfASABGwEgARgBGAEgASEBGAEhARMBEwEhASIBEwEiAQ4BDgEiASMBDgEjAQgBCAEjASQBCAEkAQQBBAEkASUBBAElAQABAAElAScBAAEnAfgAJwEpAfcAJwH3APgAHgEfASoBHgEqAR0BMAEvASoBMAEqARwB+gD8ACgB+gAoAfkAMwH3ACkBMwEpATQBNAEpAfwANAH8AP0AMwE0AV4AMwFeALwAXgA1AU8BXgBPAbEANAE2ATUBNAE1AV4ANgE0Af0ANgH9AFwAUgF9AQ0AUgENAHwBNgE5ATgBNgE4ATUBXAA3ATkBXAA5ATYBfQE/ATwBfQE8ARUAPwF9AVIBPwFSAVEBQAF/AT4BQAE+AYMBTgGFAYQBTgGEATsBPgF+AT8BPgE/AVEBeAFCAYwBeAGMAYkBTQGIAYwBTQGMAY0BQgFGAUgBQgFIAUcBRgFFAUkBRgFJAUgBRQFTAUoBRQFKAUkBUwFEAUsBUwFLAUoBRAF3AUwBRAFMAUsBdwGIAU0BdwFNAUwBTwFRAVIBTwFSAVABTwE1ATgBTwE4AVEBfAFRAFABfAFQAVIBVwAAAAMAVwADAFsAgQEAAFcAgQFXAFYBVgFXAAIAVgECAA4ARAFTAXUBRAF1AYcBPgBXAVgBPgBYAUIAQgBYAVkBQgBZAUMAPwBaAVcBPwBXAT4AQABbAVoBQABaAT8AVwFcAV0BVwFdAVgBWAFdAV4BWAFeAVkBWgFfAVwBWgFcAVcBWwFgAV8BWwFfAVoBXAFhAWIBXAFiAV0BXQFiAWMBXQFjAV4BXwFkAWEBXwFhAVwBYAFlAWQBYAFkAV8BYgFmAWcBYgFnAWMBZQFoAWkBZQFpAWQBaAFlAWoBaAFqAWsBagFlAWABagFgAWwBbAFgAVsBbAFbAW0BbQFbAUAAbQFAAEEAZwFmAW4BZwFuAWsBbwFwAWEBbwFhAWQBcQFiAWEBcQFhAXABcgFpAW4BcgFuAXMBdAFxAXABdAFwAXMBcwFwAW8BcwFvAXIBbwFkAWkBbwFpAXIBcQF0AWYBcQFmAWIBZwFrAWoBZwFqAWMBYwFqAWwBYwFsAV4BXgFsAW0BXgFtAVkBWQFtAUEAWQFBAEMAaAFrAW4BaAFuAWkBdAFzAW4BdAFuAWYBRQF6AXUBRQF1AVMBAACBAVQBAABUAXYBRAGHAUEBRAFBAXcBQwGCAXsBQwF7AYkBeAELAAoAeAEKAHkBeQEKAAkAeQEJAHoBegEJAHYBegF2AXUBTQAHAAsATQALAHsBDQB9ARUADQAVABQAVgEOAFEAVgFRAHwBPgF/AYABPgGAAX4BCABVAYEBCACBAVYBPQGCAYoBPQGKAYsBfwFBAYUBfwGFAYABgQFVAYYBgQGGAVQBPQFNAHsBPQF7AYIBPgFRATgBPgE4AYMBgwE4ATkBgwE5AYsBiwE5ATcBiwE3AT0BPwF+AU4BPwFOATwBfgGAAYUBfgGFAU4BOwE6ATwBOwE8AU4BhQFBAYcBhQGHAYQBhgFVATsBhgE7AYQBhgGEAYcBhgGHAVQBewELAHgBewF4AYkBQwFBAX8BQwF/AUABdwFBAUMBdwFDAYgBggFDAUABggFAAYoBigFAAYMBigGDAYsBiAFDAYkBiAGJAYwBjAFCAUcBjAFHAY0B').buffer),
+ HSI=b64('AAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMBAAIDAAECAwABAgMAAQIDAQACAwEAAgMAAQIDAAQCAQQAAgEEAAIBBAACAQEAAgMBAgADAQACAwECAAMBAgADAQIAAwcAAgEEAAIBBAACAQQAAgEEAAIBBAACAQQFAAEEBQABBAACAQQFAAEEBQABBQACAQUAAgEFBAABBQACAQUEAAEFAAIBBQACAQUAAgEFAAIBBQACAQUAAgEFAAIBBQACAQUGAAEFAAIBBQYAAQYFAAEFBgABBgUAAQYFAAEGAAIBBgACAQYAAgEBAAIDAQACAwEAAgMCAAEDAgABAwIAAQMCAAEDAgABAwIAAQMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDBwACAQYAAgEGAAIBAAECAwYFAAEGBQABBgUAAQYAAgEGAAIBAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAQCAQoAAgEHAAIBAAQCAQAEAgEABAIBBgACAQUGAAEFAAIBBQACAQUEAAEEBQABBAACAQQAAgEGAAIBBAACAQQAAgEEAAIBBwACAQcAAgEHAAIBBwACAQcAAgEHAAIBBwACAQcAAgEKAAIBCgACAQoAAgEKAAIBBwgCAAcIAgAHCAIABwgCAAcAAgEIBwIACAcCAAgHAgAIBwIACAACAQgAAgEIAAIBCAACAQgHAgAIAAIBCAACAQgAAgEIAAIBCAkAAQgAAgEICQABCAkAAQgJAAEICQABCAkAAQkIAAEICQABCQgAAQkIAAEJCAABCQACAQkAAgEJAAIBCQACAQkAAgEJCAABCAkAAQgAAgEIAAIBCAcCAAcIAgAHCAIABwACAQcAAgEJAAIBCQACAQkIAAEJCAABCQACAQkAAgEJAAIBAAcCAQcAAgEHAAIBBwACAQoAAgEKAAIBCgACAQoAAgEKAAIBCgACAQoAAgEKAAIBAAoCAQoAAgEKAAIBCgsAAQoLAAEKCwABCgsAAQoAAgELCgABCwoAAQsKAAELCgABCgsAAQsAAgELAAIBCwACAQsAAgELCgABCwACAQsAAgELDAABCwACAQsMAAELAAIBCwwAAQsMAAELAAIBCwwAAQsMAAEMCwABDAsAAQwLAAEMCwABDAsAAQwAAgEMAAIBDAACAQwAAgEMAAIBDAsAAQsMAAELAAIBCwACAQsKAAEKCwABCgACAQoAAgEMAAIBDAACAQwLAAEMCwABDAACAQwAAgEMAAIBAAoCAQoAAgEKAAIBDQACAQ0AAgENAAIBDQACAQ0AAgENAAIBDQACAQ0AAgEADQIBDQACAQANAgENAAIBDQACAQ0AAgENAAIBDQ4AAQ0AAgENDgABDQACAQ4NAAEODQABDg0AAQ4NAAENAAIBDg0AAQ4AAgEOAAIBDg0AAQ4AAgEODQABDg8AAQ4PAAEOAAIBDgACAQ4AAgEODwABDg8AAQ4PAAEPDgABDg8AAQ8AAgEPAAIBDwACAQ8AAgEPAAIBDg8AAQ4AAgEODQABDg0AAQ0OAAENAAIBDQACAQ0AAgENAAIBDQACAQ8AAgEPDgABDw4AAQ8OAAEPAAIBDwACAQ8AAgEADQIBAAoCAQ0AAgEADQIBAAECAwABAgMAAQIDAAECAwABAgMBAAIDAAECAwEAAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwIAAQMCAAEDAgABAwIDAQACAwEAAgMBAAIDAQACAwEAAgMBAAIDAQADAgEAAwIBAAMCAQADAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgIDAQACAwEAAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAQACAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgMAAQIDAAECAwABAgM='),HSW=b64('/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA+gUAAP8AAAD/AAAA/wAAAP8AAADxDgAA/wAAAN8gAACwTwAA2iUAAJplAAD/AAAA/wAAAP8AAAD/AAAA/wAAAPEOAAD9AgAA/wAAAN8gAADvEAAA/wAAAP8AAAD7BAAA/wAAAP0CAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAAwT4AAIB/AACCfQAAkW4AAIB/AAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAArFMAAP8AAAD/AAAA/wAAAOMcAADCPQAA5RoAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA4R4AAJZpAADOMQAAqlUAANAvAACZZgAA/wAAAIJ9AAD/AAAA/wAAAPsEAAD3CAAA/wAAAP8AAAD/AAAA/wAAAP8AAACZZgAA3SIAAPcIAAD/AAAA/wAAAPQLAAD+AQAA/wAAAP8AAAD8AwAAtkkAAP8AAADeIQAA3yAAANwjAADNMgAAsE8AAP8AAADDPAAAwj0AANMsAADyDQAA/wAAAP8AAAD/AAAA/wAAAOsUAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD+AQAA8g0AAP8AAADeIQAA8Q4AALFOAACCfQAA0C8AAOMcAADqFQAA/wAAAP8AAAD/AAAA/wAAAP8AAADfIAAA+wQAAP8AAAD/AAAA9gkAAJtkAAC5RgAA/wAAAPYJAAD/AAAA/wAAAPQLAAD+AQAA/wAAAP8AAAD/AAAAmmUAAJ1iAADKNQAAoV4AAO4RAAD/AAAA/wAAANEuAAD4BwAA/wAAAP8AAADEOwAAp1gAANolAACuUQAA+gUAAPQLAAD2CQAA4B8AAP8AAACWaQAAnWIAAJdoAADOMQAA6RYAAP8AAAD/AAAA/wAAAP8AAADDPAAA/wAAAP8AAAD7BAAA/wAAAPcIAAD/AAAA9gkAANQrAAD/AAAAyDcAAPcIAAC+QQAAplkAAKxTAADoFwAAxjkAAP8AAAD/AAAA/wAAAP8AAAD/AAAAqlUAAP8AAAD/AAAA/wAAAL1CAADnGAAA/wAAAOEeAAD/AAAA/wAAAPwDAAD/AAAA/wAAAP8AAAD/AAAAzDMAAKpVAADNMgAAqVYAAP8AAAD/AAAAjnEAANItAAD/AAAA/wAAAId4AADiHQAAvUIAAKhXAAD/AAAA/wAAAP8AAAD/AAAA/QIAAP8AAAD8AwAA/wAAAPMMAAD6BQAAyzQAAPAPAAD/AAAAv0AAAP8AAAD/AAAA+wQAAP8AAAD9AgAA/wAAAPwDAAD/AAAA/wAAAP8AAACZZgAAt0gAAK1SAACPcAAAlmkAAP8AAAD/AAAA/wAAAP8AAAD/AAAArVIAAP8AAAD8AwAAyjUAAP8AAAD/AAAA/wAAAP8AAAD/AAAAzTIAAP8AAADdIgAAukUAAM4xAAD/AAAA/wAAAP8AAAD4BwAAmmUAAIxzAACRbgAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA2iUAAPoFAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAK5RAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAC1SgAA/wAAAP8AAAD/AAAA/wAAAPsEAAD5BgAA1SoAAPUKAADbJAAAvUIAALRLAACtUgAA4h0AAPgHAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAJVqAAD6BQAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAANkmAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAA=');
+const FING=[{"p":[-0.031,-0.00319,0.032],"pitch":-0.141,"yaw":0.8462,"L":[0.02833,0.02023,0.01889],"r":0.013,"max":[0.6,1.0,1.1]},{"p":[-0.03393,0.01033,-0.03],"pitch":-0.1663,"yaw":0.2211,"L":[0.03159,0.01889,0.01466],"r":0.0115,"max":[1.45,1.6,1.2]},{"p":[-0.01618,0.01225,-0.03],"pitch":-0.2659,"yaw":0.0466,"L":[0.03682,0.02201,0.01708],"r":0.0115,"max":[1.45,1.6,1.2]},{"p":[0.01038,0.0098,-0.03],"pitch":-0.348,"yaw":0.0773,"L":[0.03461,0.0207,0.01606],"r":0.0115,"max":[1.45,1.6,1.2]},{"p":[0.03417,0.00034,-0.03],"pitch":-0.3032,"yaw":-0.0776,"L":[0.02596,0.01552,0.01204],"r":0.0115,"max":[1.45,1.6,1.2]}];
+const HGEO=new THREE.BufferGeometry();
+HGEO.setAttribute('position',new THREE.BufferAttribute(Float32Array.from(HV,v=>v*1e-4),3));
+HGEO.setIndex(new THREE.BufferAttribute(HT,1));
+HGEO.setAttribute('skinIndex',new THREE.BufferAttribute(Uint16Array.from(HSI),4));
+HGEO.setAttribute('skinWeight',new THREE.BufferAttribute(Float32Array.from(HSW,w=>w/255),4));
+HGEO.computeVertexNormals();
+function makeHand(left){
+ const root=new THREE.Group(),model=new THREE.Group();root.add(model);if(left)model.scale.x=-1;
+ const palmB=new THREE.Bone();model.add(palmB);const bones=[palmB];
+ const palm=new THREE.Object3D();palm.position.z=-.01;model.add(palm);
+ const fingers=FING.map(f=>{
+  const base=new THREE.Group();base.rotation.order='YXZ';base.rotation.set(f.pitch,f.yaw,0);base.position.set(f.p[0],f.p[1],f.p[2]);palmB.add(base);
+  let p=base;const segs=[];
+  f.L.forEach((L,i)=>{const s=new THREE.Bone();if(i)s.position.z=-f.L[i-1];p.add(s);segs.push(s);bones.push(s);p=s;});
+  const tip=new THREE.Object3D();tip.position.z=-f.L[2];p.add(tip);
+  return {f,segs,a:[0,0,0],v:[0,0,0],pts:[segs[1],segs[2],tip]};});
+ const mesh=new THREE.SkinnedMesh(HGEO,SKIN);mesh.frustumCulled=false;model.add(mesh);
+ root.updateMatrixWorld(true);
+ mesh.bind(new THREE.Skeleton(bones));mesh.normalizeSkinWeights();
+ scene.add(root);root.visible=false;
+ return {root,model,palm,fingers,curl:[0,0,0,0,0]};}
+const hands=[makeHand(true),makeHand(false)];
+const tmp=new V3(),tmpS=new V3();
+
+// Finger physics: spring-damper joints driven by curl; blocked by the floor and by a held ball
+function stepFingers(h,dt){
+ h.fingers.forEach((F,i)=>{for(let j=0;j<3;j++){
+  const tgt=(.1+.9*h.curl[i])*F.f.max[j],acc=220*(tgt-F.a[j])-20*F.v[j];
+  F.v[j]+=acc*dt;F.a[j]=clamp(F.a[j]+F.v[j]*dt,-.15,F.f.max[j]+.1);F.segs[j].rotation.x=-F.a[j];}});
+ h.root.updateMatrixWorld(true);
+ const block=(F,hit)=>{for(let k=0;k<8&&hit(F);k++){
+  for(let j=0;j<3;j++){F.a[j]=Math.max(F.a[j]-.06,-.15);F.v[j]=0;F.segs[j].rotation.x=-F.a[j];}
+  h.root.updateMatrixWorld(true);}};
+ h.fingers.forEach(F=>{
+  block(F,f=>f.pts.some(o=>o.getWorldPosition(tmp).y<=f.f.r*.9));
+  if(h.held)block(F,f=>f.pts.some(o=>o.getWorldPosition(tmp).distanceTo(h.held.position)<R+f.f.r*.8));});
+}
+hands.forEach(h=>{h.anchor=new THREE.Object3D();h.anchor.position.set(0,-.07,-.03);h.model.add(h.anchor);h.off=new V3();h.hist=[];h.held=null;h.sq=false;h.grip=0;});
+
+// XR inputs (controllers and hands live inside the rig so the player can move)
+const M4=new THREE.Matrix4();
+const ctrls=[0,1].map(i=>{
+ const o={g:renderer.xr.getControllerGrip(i),c:renderer.xr.getController(i),hd:renderer.xr.getHand(i),gp:null,side:null,tracked:false};
+ rig.add(o.g,o.c,o.hd);
+ o.c.addEventListener('connected',e=>{o.gp=e.data.gamepad||null;o.side=e.data.handedness;o.tracked=!!e.data.hand;});
+ o.c.addEventListener('disconnected',()=>{o.side=null;});
+ return o;});
+const TIPS=['thumb-tip','index-finger-tip','middle-finger-tip','ring-finger-tip','pinky-finger-tip'];
+const RNG=[[.13,.065],[.17,.07],[.18,.07],[.17,.07],[.14,.06]];
+function updateXR(){
+ hands.forEach(h=>{h.prevVis=h.root.visible;h.root.visible=false;});
+ ctrls.forEach(o=>{
+  if(!o.side||o.side==='none')return;
+  const h=hands[o.side==='left'?0:1],J=o.hd.joints;h.gp=o.gp;
+  if(o.tracked&&J&&J.wrist&&J.wrist.visible){
+   M4.multiplyMatrices(rig.matrix,J.wrist.matrix).decompose(h.root.position,h.root.quaternion,tmpS);
+   h.model.rotation.set(0,0,0);h.root.visible=true;
+   const w=J.wrist.position;
+   TIPS.forEach((n,i)=>{const t=J[n];if(!t)return;const d=t.position.distanceTo(w);h.curl[i]=clamp((RNG[i][0]-d)/(RNG[i][0]-RNG[i][1]),0,1);});
+  }else if(!o.tracked){
+   M4.multiplyMatrices(rig.matrix,o.g.matrix).decompose(h.root.position,h.root.quaternion,tmpS);
+   h.model.rotation.set(0.25,0,o.side==='left'?Math.PI/2:-Math.PI/2);h.root.visible=true;
+   const b=o.gp?o.gp.buttons:[],val=k=>b[k]?b[k].value:0;
+   const t=val(0),g=val(1),th=Math.max(val(3),val(4),val(5));
+   h.curl=[Math.max(th,g*.6),t,g,g,g];
+  }
+  h.grip=(h.curl[2]+h.curl[3]+h.curl[4])/3;});
+}
+
+// Player movement: left stick walks (relative to where you look), A jumps, B respawns balls
+const pv=new V3(),want=new V3(),dvv=new V3();let pvy=0,jumpHeld=false,rstHeld=false;
+function locomote(dt){
+ let sx=0,sy=0,jump=false,rst=false;
+ ctrls.forEach(o=>{if(!o.gp||o.tracked)return;const a=o.gp.axes,b=o.gp.buttons;
+  if(o.side==='left'){sx=a[2]||a[0]||0;sy=a[3]||a[1]||0;}
+  else if(o.side==='right'){jump=!!(b[4]&&b[4].pressed);rst=!!(b[5]&&b[5].pressed);}});
+ const mag=Math.hypot(sx,sy);
+ if(mag<.15)sx=sy=0;else{const k=(Math.min(mag,1)-.15)/.85/mag;sx*=k;sy*=k;}
+ const e=cam.matrixWorld.elements;let fx=-e[8],fz=-e[10];const fl=Math.hypot(fx,fz)||1;fx/=fl;fz/=fl;
+ want.set((-fz*sx-fx*sy)*2.6,0,(fx*sx-fz*sy)*2.6);
+ const ground=rig.position.y<=1e-4&&pvy<=0;
+ const acc=(want.lengthSq()>0?(ground?24:4):(ground?18:.4))*dt;
+ dvv.subVectors(want,pv);const dl=dvv.length();if(dl>acc)dvv.multiplyScalar(acc/dl);pv.add(dvv);
+ if(jump&&!jumpHeld&&ground)pvy=3.13;jumpHeld=jump;
+ if(rst&&!rstHeld)resetBalls();rstHeld=rst;
+ pvy-=9.81*dt;rig.position.y+=pvy*dt;if(rig.position.y<=0){rig.position.y=0;if(pvy<0)pvy=0;}
+ rig.position.x=clamp(rig.position.x+pv.x*dt,-40,40);rig.position.z=clamp(rig.position.z+pv.z*dt,-40,40);
+ rig.updateMatrix();rig.updateMatrixWorld(true);
+}
+
+// Balls: 150 g, air drag, spin, friction, restitution, ball-ball and hand collisions
+const R=.07,BM=.15,BI=.4*BM*R*R,balls=[];
+const UP=new V3(0,1,0),ZERO=new V3(),_a=new V3(),_b=new V3(),_c=new V3(),_d=new V3(),_e=new V3(),_f=new V3(),_q=new THREE.Quaternion();
+const cvs=document.createElement('canvas');cvs.width=128;cvs.height=64;
+const cx=cvs.getContext('2d');cx.fillStyle='#fff';cx.fillRect(0,0,128,64);cx.fillStyle='#777';cx.fillRect(0,28,128,8);cx.fillRect(30,0,8,64);
+const tex=new THREE.CanvasTexture(cvs);
+for(let i=0;i<6;i++){const m=new THREE.Mesh(new THREE.SphereGeometry(R,24,16),
+ new THREE.MeshStandardMaterial({color:new THREE.Color().setHSL(i/6,.75,.55),map:tex,roughness:.35}));
+ m.userData={v:new V3(),w:new V3(),held:null};scene.add(m);balls.push(m);}
+function resetBalls(){
+ hands.forEach(h=>{if(h.held)release(h);});
+ const e=cam.matrixWorld.elements;let fx=-e[8],fz=-e[10];const fl=Math.hypot(fx,fz)||1;fx/=fl;fz/=fl;
+ balls.forEach((b,i)=>{const s=(i-2.5)*.2;
+  b.position.set(e[12]+fx*.7-fz*s,1.3+Math.random()*.3,e[14]+fz*.7+fx*s);b.userData.v.set(0,0,0);b.userData.w.set(0,0,0);});}
+resetBalls();document.getElementById('rs').onclick=resetBalls;
+// impulse-based contact with Coulomb friction; n points from surface to ball, cv is the surface velocity, mc its effective mass (0 = immovable)
+function contact(b,n,cv,e,mu,mc){
+ const u=b.userData,v=u.v,w=u.w;
+ _a.copy(n).multiplyScalar(-R);
+ _b.crossVectors(w,_a).add(v).sub(cv);
+ const vn=_b.dot(n);if(vn>=0)return;
+ const mi=mc?1/(1/BM+1/mc):BM,jn=-(1+(-vn<.8?0:e))*vn*mi;
+ v.addScaledVector(n,jn/BM);
+ _c.copy(_b).addScaledVector(n,-vn);
+ const vt=_c.length();
+ if(vt>1e-6){const jt=Math.min(mu*jn,vt*BM/3.5);_c.multiplyScalar(-jt/vt);
+  v.addScaledVector(_c,1/BM);_d.crossVectors(_a,_c);w.addScaledVector(_d,1/BI);}
+}
+function stepBalls(dt,cols,al){
+ balls.forEach(b=>{
+  const u=b.userData;if(u.held)return;const v=u.v,w=u.w;
+  v.y-=9.81*dt;
+  const sp=v.length();if(sp>1e-4)v.multiplyScalar(Math.max(0,1-.029*sp*dt));
+  b.position.addScaledVector(v,dt);
+  if(b.position.y<R){b.position.y=R;contact(b,UP,ZERO,.78,.6,0);
+   const hs=Math.hypot(v.x,v.z);if(hs>1e-4){const k=Math.max(0,hs-.2*dt)/hs;v.x*=k;v.z*=k;}w.multiplyScalar(1-.4*dt);}
+  ['x','z'].forEach(a=>{if(Math.abs(b.position[a])>40){b.position[a]=Math.sign(b.position[a])*40;v[a]*=-.6;}});
+  cols.forEach(c=>{_f.lerpVectors(c.p0,c.p1,al);const d=_e.subVectors(b.position,_f),L=d.length(),mr=R+c.r;
+   if(L<mr&&L>1e-6){d.divideScalar(L);b.position.addScaledVector(d,mr-L);contact(b,d,c.v,.4,.7,1);}});
+  const ws=w.length();if(ws>1e-3){_q.setFromAxisAngle(_f.copy(w).divideScalar(ws),ws*dt);b.quaternion.premultiply(_q);}
+ });
+ for(let i=0;i<balls.length;i++)for(let j=i+1;j<balls.length;j++){
+  const A=balls[i],B=balls[j];if(A.userData.held||B.userData.held)continue;
+  const d=_e.subVectors(B.position,A.position),L=d.length();
+  if(L<2*R&&L>1e-6){d.divideScalar(L);const o=(2*R-L)/2;A.position.addScaledVector(d,-o);B.position.addScaledVector(d,o);
+   const vr=_f.subVectors(B.userData.v,A.userData.v).dot(d);
+   if(vr<0){const k=(1+.85)*vr/2;A.userData.v.addScaledVector(d,k);B.userData.v.addScaledVector(d,-k);}}}
+}
+function collect(dt){const out=[];
+ hands.forEach(h=>{if(!h.root.visible)return;
+  const add=(o,r)=>{const p1=o.getWorldPosition(new V3()),p0=(h.prevVis&&o.userData.prev)||p1.clone();
+   out.push({p0,p1,r,v:p1.clone().sub(p0).divideScalar(dt)});o.userData.prev=p1.clone();};
+  add(h.palm,.06);h.fingers.forEach(F=>F.pts.forEach(o=>add(o,F.f.r)));});
+ return out;}
+
+// Grabbing: squeeze the grip with a ball in your palm; release to throw with your hand's velocity
+function release(h){const b=h.held;if(!b)return;b.userData.held=null;h.held=null;
+ const H=h.hist,n=H.length,v=b.userData.v.set(0,0,0);
+ if(n>1){const t=H[n-1].t-H[0].t;if(t>.02){v.copy(H[n-1].p).sub(H[0].p).divideScalar(t);if(v.length()>12)v.setLength(12);}}}
+function grabLogic(h,now,dt){
+ if(!h.root.visible){release(h);h.sq=false;return;}
+ if(!h.prevVis)h.hist.length=0;
+ h.palm.getWorldPosition(_a);h.hist.push({t:now,p:_a.clone()});
+ while(h.hist.length>2&&now-h.hist[0].t>.1)h.hist.shift();
+ const sq=h.grip>.6;
+ if(h.held){if(h.grip<.35)release(h);}
+ else if(sq&&!h.sq){
+  h.anchor.getWorldPosition(_b);let best=null,bd=.14;
+  balls.forEach(b=>{if(b.userData.held)return;const d=b.position.distanceTo(_b);if(d<bd){bd=d;best=b;}});
+  if(best){best.userData.held=h;h.held=best;h.off.copy(h.anchor.worldToLocal(best.position.clone()));
+   try{h.gp&&h.gp.hapticActuators&&h.gp.hapticActuators[0].pulse(.5,40);}catch(e){}}}
+ h.sq=sq;
+ if(h.held){const b=h.held;h.off.lerp(ZERO,1-Math.exp(-14*dt));b.position.copy(h.anchor.localToWorld(_c.copy(h.off)));b.userData.w.set(0,0,0);}
+}
+
+// Loop
+const clock=new THREE.Clock();
+renderer.setAnimationLoop(()=>{
+ const dt=Math.min(clock.getDelta(),1/30)||1/60;
+ if(!renderer.xr.isPresenting)return;
+ locomote(dt);updateXR();
+ hands.forEach(h=>{if(h.root.visible){h.root.updateMatrixWorld(true);stepFingers(h,dt);}});
+ const now=performance.now()/1000;
+ hands.forEach(h=>grabLogic(h,now,dt));
+ const cols=collect(dt),N=clamp(Math.ceil(dt*240),1,8);
+ for(let s=0;s<N;s++)stepBalls(dt/N,cols,(s+1)/N);
+ floor.position.set(rig.position.x,0,rig.position.z);
+ renderer.render(scene,cam);
+});
+addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+
+// Enter VR
+const btn=document.getElementById('vr'),ui=document.getElementById('ui');
+const err=document.getElementById('err');
+async function start(){
+ err.textContent='';let s=null,last=null;
+ for(const o of [{optionalFeatures:['local-floor','hand-tracking']},{optionalFeatures:['local-floor']},{}]){
+  try{s=await navigator.xr.requestSession('immersive-vr',o);break;}catch(e){last=e;}}
+ if(!s){err.textContent='Could not start VR: '+(last?last.name+' - '+last.message:'unknown error')+(top!==self?' (this page is inside a frame that blocks VR, open it directly or host the file over HTTPS)':'')+' [secure='+isSecureContext+', framed='+(top!==self)+', '+location.protocol+']';return;}
+ try{await renderer.xr.setSession(s);ui.style.display='none';s.addEventListener('end',()=>{ui.style.display='';});}
+ catch(e){err.textContent='Could not start VR: '+e.name+' - '+e.message;}
+}
+if(!navigator.xr){btn.textContent='WebXR not available';err.textContent='Open this page in a VR headset browser over HTTPS.';}
+else navigator.xr.isSessionSupported('immersive-vr').then(ok=>{
+ if(ok){btn.textContent='Enter VR';btn.onclick=start;}
+ else{btn.textContent='VR not supported';err.textContent='This browser or device cannot start an immersive VR session.';}
+}).catch(e=>{btn.textContent='VR check failed';err.textContent=String(e);});
+</script></body></html>
